@@ -1,91 +1,118 @@
 import numpy as np
-def relu(x):
-  return np.maximum(0,x)  #Turns negative into 0, and positive into itself
 
-def relu_deriv(x):          #Derivative =1 if x>0 , else0
- return (x>0).astype(float)
+def relu(x): return np.where(x > 0, x, 0.01 * x)
+def relu_deriv(x): return np.where(x > 0, 1, 0.01)
 
-def mse(y_true, y_pred):        #Mean squared error
- return np.mean((y_true - y_pred)**2) 
+def softplus(x):
+    return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
 
-def mse_grad(y_true, y_pred):       #Derivative of mean squared error loss
-  return 2 * (y_pred - y_true) / y_true.size
+def softplus_deriv(x):
+    return 1.0 / (1.0 + np.exp(-x))
+
+def poisson_loss(y_true, y_pred, eps=1e-8):
+    return np.mean(y_pred - y_true * np.log(y_pred + eps))
+
+def poisson_grad(y_true, y_pred, eps=1e-8):
+    return (1.0 - y_true / (y_pred + eps)) / y_true.size
 
 
 class FFNN:
-    def __init__(self,input_size, hidden_sizes, output_size=1, lr=0.01, seed=31):
+    def __init__(self, input_size, hidden_sizes, output_size=1, lr=0.0005, seed=31):
         np.random.seed(seed)
-        self.lr=lr
-        self.weight=[]
-        self.biases=[]
+        self.lr = lr
+        self.weights = []
+        self.biases = []
 
-        prev= input_size
-        #Create hidden layers
+        prev = input_size
+        # hidden layers
         for h in hidden_sizes:
-            W=np.random.randn(prev,h) * np.sqrt(2.0/ prev) #small random value
-            b=np.zeros((1,h))       #biases start at zero
+            W = np.random.randn(prev, h) * np.sqrt(2.0 / prev)
+            b = np.zeros((1, h))
             self.weights.append(W)
             self.biases.append(b)
-            prev=h
-        #Create output layer
-        W=np.random.randn(prev,output_size) * np.sqrt(2.0/ prev)
-        b=np.zeros((1, output_size))
+            prev = h
+        # output layer
+        W = np.random.randn(prev, output_size) * np.sqrt(2.0 / prev)
+        b = np.zeros((1, output_size))
         self.weights.append(W)
         self.biases.append(b)
-    
-    def forward(self,X):
-       activations= [X]
-       preacts =[]
 
-       for i in range(len(self.weights) -1):
-          z= activations[-1] @ self.weights[i] + self.biases[i]
-          preacts.append(z)
-          a =relu(z)
-          activations.append(a)
-       z = activations[-1] @ self.weights[-1] +self.biases[-1]
-       preacts.append(z)
-       activations.append(z)
+    def forward(self, X):
+        activations = [X]
+        preacts = []
 
-       return activations, preacts
-    
-    def backward(self,activations,preacts, y_true):
-       grads_w, grads_b= [],[]
-       y_pred =activations[-1]
-       dY = mse_grad(y_true, y_pred)   # error from output
+        # hidden layers: LeakyReLU
+        for i in range(len(self.weights) - 1):
+            z = activations[-1] @ self.weights[i] + self.biases[i]
+            preacts.append(z)
+            a = relu(z)
+            activations.append(a)
 
-       #Output layer gradient
-       grad_w= activations[-2].T @  dY
-       grad_b=np.sum(dY,axis=0, keepdims=True)
-       grads_w.insert(0, grad_w)
-       grads_b.insert(0, grad_b)
+        # output layer: linear -> softplus
+        z = activations[-1] @ self.weights[-1] + self.biases[-1]
+        preacts.append(z)
+        a = softplus(z)
+        activations.append(a)
 
-       #Backprop through hidden layers
-       dA =dY @ self.weights[-1].T
-       for i in reversed(range(len(self.weights) -1)):
-          dZ =dA * relu_deriv(preacts[i])
-          grad_w = activations[i].T @ dZ
-          grad_b = np.sum(dZ, axis=0, keepdims=True)
-          grads_w.insert(0, grad_w)
-          grads_b.insert(0, grad_b)
-          if i != 0:
-              dA = dZ @ self.weights[i].T
+        return activations, preacts
 
-        # Update weights and biases
-       for i in range(len(self.weights)):
+    def backward(self, activations, preacts, y_true):
+        grads_w, grads_b = [], []
+        y_pred = activations[-1]
+
+        # dL/dλ̂
+        dY = poisson_grad(y_true, y_pred)
+        # dL/dz_L = dL/dλ̂ * dλ̂/dz_L
+        dZ_L = dY * softplus_deriv(preacts[-1])
+
+        # output layer gradients
+        grad_w = activations[-2].T @ dZ_L
+        grad_b = np.sum(dZ_L, axis=0, keepdims=True)
+        grads_w.insert(0, grad_w)
+        grads_b.insert(0, grad_b)
+
+        # backprop through hidden layers
+        dA = dZ_L @ self.weights[-1].T
+        for i in reversed(range(len(self.weights) - 1)):
+            dZ = dA * relu_deriv(preacts[i])
+            grad_w = activations[i].T @ dZ
+            grad_b = np.sum(dZ, axis=0, keepdims=True)
+            grads_w.insert(0, grad_w)
+            grads_b.insert(0, grad_b)
+            if i != 0:
+                dA = dZ @ self.weights[i].T
+
+        # gradient clipping
+        for g in grads_w:
+            np.clip(g, -1.0, 1.0, out=g)
+        for g in grads_b:
+            np.clip(g, -1.0, 1.0, out=g)
+
+        # update
+        for i in range(len(self.weights)):
             self.weights[i] -= self.lr * grads_w[i]
-            self.biases[i] -= self.lr * grads_b[i]
-       return mse(y_true, y_pred)
-       
-    def fit(self, X, y, epochs=1000):
+            self.biases[i]  -= self.lr * grads_b[i]
+
+        return poisson_loss(y_true, y_pred)
+
+    def fit(self, X, y, epochs=20, batch_size=1024):
+        N = X.shape[0]
         for epoch in range(epochs):
-            activations, preacts = self.forward(X)
-            loss = self.backward(activations, preacts, y)
-            if epoch % 100 == 0:
-                print(f"Epoch {epoch}, Loss: {loss:.6f}")
+            permutation = np.random.permutation(N)
+            X = X[permutation]
+            Y = y[permutation]
+
+            for i in range(0, N, batch_size):
+                X_batch = X[i:i+batch_size]
+                y_batch = Y[i:i+batch_size]    # <-- fixed here
+
+                activations, preacts = self.forward(X_batch)
+                loss = self.backward(activations, preacts, y_batch)
+
+            print(f"Epoch {epoch}, Loss={loss}")
 
     def predict(self, X):
-        a, _ = self.forward(X)
-        return a[-1]
-    
+        activations, _ = self.forward(X)
+        return activations[-1]
 
 
