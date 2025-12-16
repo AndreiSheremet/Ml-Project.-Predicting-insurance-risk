@@ -6,6 +6,7 @@ class Decision_Tree:
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
         self.tree = None
+        self.feature_count={}
 
   def check_stop(self, y, depth):  #checking function to see when tree shouldn't expand anymore
         if depth >= self.max_depth:
@@ -31,6 +32,7 @@ class Decision_Tree:
     if self.check_stop(y, depth):
        return np.mean(y)
     feat,thresh = self.find_best_split(X,y)
+    self.feature_count[feat] += 1
     left_mask=X[:,feat] <= thresh
     right_mask = X[:, feat] > thresh
     left_branch= self.build_tree(X[left_mask],y[left_mask],depth+1)
@@ -38,7 +40,9 @@ class Decision_Tree:
     return(feat,thresh,left_branch,right_branch)
   
   def fit(self, X, y):
+    self.feature_count= {i :0 for i in range(X.shape[1])}
     self.tree = self.build_tree(X, y)
+    
 
   def print_tree(self,node, feature_names, depth=0):
     indent = "  " * depth
@@ -52,12 +56,6 @@ class Decision_Tree:
     self.print_tree(right, feature_names, depth+1)
   
   def predict_one(self,x,node=None):
-     
-    """
-    Recursively traverse the trained decision tree and return prediction for one sample.
-    Handles potential generator nodes safely.
-    """
-    # Start from root if node is not provided
     if node is None:
         node = self.tree
 
